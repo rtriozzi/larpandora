@@ -39,13 +39,15 @@ showerlinearenergy:{
 }
 
 showernumelectronsenergy:{
-     tool_type:  ShowerNumElectronsEnergy
-     BaseTools: @local::showerbasetools
-     CalorimetryAlg: @nil
-     RecombinationFactor: 0.64
-     # PFParticleLabel: "pandora"
-     ShowerEnergyOutputLabel: "ShowerEnergy"
-     ShowerBestPlaneOutputLabel: "ShowerBestPlane"
+    tool_type                   : ShowerNumElectronsEnergy
+    BaseTools                   : @local::showerbasetools
+    CalorimetryAlg              : @nil
+    RecombinationFactor         : 0.64
+    ShowerEnergyOutputLabel     : "ShowerEnergy"
+    ShowerBestPlaneOutputLabel  : "ShowerBestPlane"
+    # PFParticleLabel             : "pandora"
+    ApplyCorrectionsInNorm      : false # do not expect INormalizeCharge tools
+    NormTools                   : [] # empty list of INormalizeCharge tools
  }
 
 
@@ -111,19 +113,22 @@ showerpfpvertexstartposition:{
 }
 
 showerunidirectiondedx:{
-    tool_type: ShowerUnidirectiondEdx
-    BaseTools: @local::showerbasetools
+    tool_type                       : ShowerUnidirectiondEdx
+    BaseTools                       : @local::showerbasetools
 
-    CalorimetryAlg:  @nil
-    MaxHitPlane:     true #Set the best planes as the one with the most hits
-    MissFirstPoint:  true #Do not use any hits from the first wire
-    dEdxTrackLength: 3    #Max length from a hit can be to the start point in cm.
-    SumHitSnippets: false
-    ShowerStartPositionInputLabel: "ShowerStartPosition"
-    InitialTrackHitsInputLabel: "InitialTrackHits"
-    ShowerDirectionInputLabel: "ShowerDirection"
-    ShowerdEdxOutputLabel: "ShowerdEdx"
-    ShowerBestPlaneOutputLabel: "ShowerBestPlane"
+    CalorimetryAlg                  :  @nil
+    MaxHitPlane                     : true # set the best planes as the one with the most hits
+    MissFirstPoint                  : true # do not use any hits from the first wire
+    dEdxTrackLength                 : 3    # max length from a hit can be to the start point in cm.
+    SumHitSnippets                  : false
+    ShowerStartPositionInputLabel   : "ShowerStartPosition"
+    InitialTrackHitsInputLabel      : "InitialTrackHits"
+    ShowerDirectionInputLabel       : "ShowerDirection"
+    ShowerdEdxOutputLabel           : "ShowerdEdx"
+    ShowerBestPlaneOutputLabel      : "ShowerBestPlane"
+    # PFParticleLabel                 : "pandora"
+    ApplyCorrectionsInNorm          : false # do not expect INormalizeCharge tools
+    NormTools                       : [] # empty list of INormalizeCharge tools
 }
 
 showertrackhitdirection:{
@@ -268,35 +273,37 @@ showertracktrajtospacepoint:{
 }
 
 showertrajpointdedx:{
-    tool_type: ShowerTrajPointdEdx
-    BaseTools: @local::showerbasetools
-    CalorimetryAlg: @nil
-    MinDistCutOff:         2    #Distance in wires a hit has to be from the start
-    #position of the track to be used
-    MaxDist:               2    #Distance in wires a that a trajectory point can
-    #be from a spacepoint to match to it.
-    MinAngleToWire:        0    #Minimum angle between the wire direction and the shower
-    #direction for the spacepoint to be used. in radians
-    #Default means the cut has no effect.
-    ShapingTime:           999  #Defualt means the cut has no effect. in microseconds.
-    dEdxTrackLength:       3  #Max Distance a spacepoint can be away
-    #from the start of the track. in seconds
-    dEdxCut:               999.
-    CutStartPosition:     false #Remove hits using MinDistCutOff from the vertex as well
-    UseMedian:            true  #Use the median dEdx rather the mean.
-    T0Correct:            false
-    SCECorrectPitch:      false
-    SCECorrectEField:     false
-    SCEInputCorrected:    false
-    SumHitSnippets: false
-    # PFParticleLabel: "pandora"
-    ShowerStartPositionInputLabel: "ShowerStartPosition"
-    InitialTrackSpacePointsInputLabel: "InitialTrackSpacePoints"
-    InitialTrackHitsInputLabel: "InitialTrackHits"
-    InitialTrackInputLabel: "InitialTrack"
-    ShowerdEdxOutputLabel: "ShowerdEdx"
-    ShowerBestPlaneOutputLabel: "ShowerBestPlane"
-    ShowerdEdxVecOutputLabel: "ShowerdEdxVec"
+    tool_type                           : ShowerTrajPointdEdx
+    BaseTools                           : @local::showerbasetools
+    CalorimetryAlg                      : @nil
+    MinDistCutOff                       : 2 # distance in wires a hit has to be from the start
+    # position of the track to be used
+    MaxDist                             : 2 # distance in wires a that a trajectory point can
+    # be from a spacepoint to match to it.
+    MinAngleToWire                      : 0 # minimum angle between the wire direction and the shower
+    # direction for the spacepoint to be used. in radians
+    # default means the cut has no effect.
+    ShapingTime                         : 999 # defualt means the cut has no effect. in microseconds.
+    dEdxTrackLength                     : 3 # max Distance a spacepoint can be away from the start of the track. in seconds
+    dEdxCut                             : 999.
+    CutStartPosition                    : false # remove hits using MinDistCutOff from the vertex as well
+    UseMedian                           : true  # use the median dEdx rather the mean.
+    T0Correct                           : false
+    SCECorrectPitch                     : false
+    SCECorrectEField                    : false
+    SCEInputCorrected                   : false
+    SumHitSnippets                      : false
+    ResultsOverrideMode                 : 0 # 0 is default
+    # PFParticleLabel                    :      "pandora"
+    ShowerStartPositionInputLabel       : "ShowerStartPosition"
+    InitialTrackSpacePointsInputLabel   : "InitialTrackSpacePoints"
+    InitialTrackHitsInputLabel          : "InitialTrackHits"
+    InitialTrackInputLabel              : "InitialTrack"
+    ShowerdEdxOutputLabel               : "ShowerdEdx"
+    ShowerBestPlaneOutputLabel          : "ShowerBestPlane"
+    ShowerdEdxVecOutputLabel            : "ShowerdEdxVec"
+    ApplyCorrectionsInNorm              : false # do not expect INormalizeCharge tools
+    NormTools                           : [] # empty list of INormalizeCharge tools
 }
 
 showerincrementaltrackhitfinder:{

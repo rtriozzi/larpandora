@@ -29,6 +29,10 @@
 
 using ROOT::Math::VectorUtil::Angle;
 
+// For Calorimetry normalization
+#include "art/Utilities/make_tool.h"
+#include "larreco/Calorimetry/INormalizeCharge.h"
+
 namespace ShowerRecoTools {
 
   class ShowerTrajPointdEdx : IShowerTool {
@@ -44,10 +48,20 @@ namespace ShowerRecoTools {
     void FinddEdxLength(std::vector<double>& dEdx_vec, std::vector<double>& dEdx_val);
 
   private:
+    // Normalization function
+    const double Normalize(const double dQdx,
+		     const art::Event& e,
+		     const recob::Hit& h,
+		     const geo::Point_t& location,
+		     const geo::Vector_t& direction,
+		     const double t0);
+
     //Servcies and Algorithms
     art::ServiceHandle<geo::Geometry> fGeom;
     geo::WireReadoutGeom const& fChannelMap = art::ServiceHandle<geo::WireReadout>()->Get();
     calo::CalorimetryAlg fCalorimetryAlg;
+
+    std::vector< std::unique_ptr<INormalizeCharge> > fNormalizationTools;
 
     //fcl parameters
     float fMinAngleToWire; //Minimum angle between the wire direction and the shower
@@ -66,14 +80,22 @@ namespace ShowerRecoTools {
     bool fUseMedian;        //Use the median value as the dEdx rather than the mean.
     bool fCutStartPosition; //Remove hits using MinDistCutOff from the vertex as well.
 
-    bool fT0Correct;       // Whether to look for a T0 associated to the PFP
-    bool fSCECorrectPitch; // Whether to correct the "squeezing" of pitch, requires corrected input
+    bool fT0Correct;       //Whether to look for a T0 associated to the PFP
+    bool fSCECorrectPitch; //Whether to correct the "squeezing" of pitch, requires corrected input
     bool
-      fSCECorrectEField; // Whether to use the local electric field, from SpaceChargeService, in recombination calc.
+      fSCECorrectEField; //Whether to use the local electric field, from SpaceChargeService, in recombination calc.
     bool
-      fSCEInputCorrected; // Whether the input has already been corrected for spatial SCE distortions
+      fSCEInputCorrected; //Whether the input has already been corrected for spatial SCE distortions
 
-    bool fSumHitSnippets; // Whether to treat hits individually or only one hit per snippet
+    bool fSumHitSnippets; //Whether to treat hits individually or only one hit per snippet
+    
+    bool fApplyCorrectionsInNorm; // Whether to instead apply calorimetry corrections in norm.
+    
+    int
+      fResultsOverrideMode; //How results from a previous tool writing on the same tool are overridden
+    //0: always override previous results
+    //1: override plane-by-plane
+    //2: override only if all three planes are well-defined
 
     art::InputTag fPFParticleLabel;
     int fVerbose;
@@ -103,6 +125,8 @@ namespace ShowerRecoTools {
     , fSCECorrectEField(pset.get<bool>("SCECorrectEField"))
     , fSCEInputCorrected(pset.get<bool>("SCEInputCorrected"))
     , fSumHitSnippets(pset.get<bool>("SumHitSnippets"))
+    , fApplyCorrectionsInNorm(pset.get<bool>("ApplyCorrectionsInNorm"))
+    , fResultsOverrideMode(pset.get<int>("ResultsOverrideMode"))
     , fPFParticleLabel(pset.get<art::InputTag>("PFParticleLabel"))
     , fVerbose(pset.get<int>("Verbose"))
     , fShowerStartPositionInputLabel(pset.get<std::string>("ShowerStartPositionInputLabel"))
@@ -116,6 +140,14 @@ namespace ShowerRecoTools {
     if ((fSCECorrectPitch || fSCECorrectEField) && !fSCEInputCorrected) {
       throw cet::exception("ShowerTrajPointdEdx")
         << "Can only correct for SCE if input is already corrected" << std::endl;
+    }
+
+    if ( fApplyCorrectionsInNorm ) {
+      auto tool_psets = pset.get< std::vector< fhicl::ParameterSet > >("NormTools");
+
+      for ( auto const& tool_pset : tool_psets ) {
+	      fNormalizationTools.push_back( art::make_tool<INormalizeCharge>(tool_pset) );
+      }
     }
   }
 
@@ -156,6 +188,10 @@ namespace ShowerRecoTools {
 
     // Get the spacepoints
     auto const spHandle = Event.getValidHandle<std::vector<recob::SpacePoint>>(fPFParticleLabel);
+
+    // Setup normalization tools
+    for (auto const& nt : fNormalizationTools)
+      nt->setup(Event);
 
     // Get the hits associated with the space points
     const art::FindManyP<recob::Hit>& fmsp =
@@ -235,12 +271,11 @@ namespace ShowerRecoTools {
         if (dist_from_start > dEdxTrackLength) { continue; }
       }
 
-      //Find the closest trajectory point of the track. These should be in order if the user has used ShowerTrackTrajToSpacePoint_tool but the sake of gernicness I'll get the cloest sp.
+      // Find the closest trajectory point of the track. These should be in order if the user has used ShowerTrackTrajToSpacePoint_tool but the sake of gernicness I'll get the cloest sp.
       unsigned int index = 999;
       double MinDist = 999;
       for (unsigned int traj = 0; traj < InitialTrack.NumberTrajectoryPoints(); ++traj) {
 
-        //ignore bogus info.
         auto flags = InitialTrack.FlagsAtPoint(traj);
         if (flags.isSet(recob::TrajectoryPointFlagTraits::NoPoint)) { continue; }
 
@@ -254,22 +289,22 @@ namespace ShowerRecoTools {
         }
       }
 
-      //If there is no matching trajectory point then bail.
+      // If there is no matching trajectory point then bail.
       if (index == 999) { continue; }
 
       geo::Point_t const TrajPosition = InitialTrack.LocationAtPoint(index);
       geo::Point_t const TrajPositionStart = InitialTrack.LocationAtPoint(0);
 
-      //Ignore values with 0 mag from the start position
+      // Ignore values with 0 mag from the start position
       if ((TrajPosition - TrajPositionStart).R() == 0) { continue; }
       if ((TrajPosition - ShowerStartPosition).R() == 0) { continue; }
 
       if ((TrajPosition - TrajPositionStart).R() < fMinDistCutOff * wirepitch) { continue; }
 
-      //Get the direction of the trajectory point
+      // Get the direction of the trajectory point
       geo::Vector_t const TrajDirection = InitialTrack.DirectionAtPoint(index);
 
-      //If the direction is in the same direction as the wires within some tolerance the hit finding struggles. Let remove these.
+      // If the direction is in the same direction as the wires within some tolerance the hit finding struggles. Let remove these.
       // Note that we project in the YZ plane to make sure we are not cutting on
       // the angle into the wire planes, that should be done by the shaping time cut
       geo::Vector_t const TrajDirectionYZ{0, TrajDirection.Y(), TrajDirection.Z()};
@@ -280,12 +315,12 @@ namespace ShowerRecoTools {
         continue;
       }
 
-      //If the direction is too much into the wire plane then the shaping amplifer cuts the charge. Lets remove these events.
+      // If the direction is too much into the wire plane then the shaping amplifer cuts the charge. Lets remove these events.
       double velocity = detProp.DriftVelocity(detProp.Efield(), detProp.Temperature());
       double distance_in_x = TrajDirection.X() * (wirepitch / TrajDirection.Dot(PlaneDirection));
       double time_taken = std::abs(distance_in_x / velocity);
 
-      //Shaping time doesn't seem to exist in a global place so add it as a fcl.
+      // Shaping time doesn't seem to exist in a global place so add it as a fcl.
       if (fShapingTime < time_taken) {
         if (fVerbose) mf::LogWarning("ShowerTrajPointdEdx") << "move for shaping time" << std::endl;
         continue;
@@ -293,10 +328,10 @@ namespace ShowerRecoTools {
 
       if ((TrajPosition - TrajPositionStart).R() > dEdxTrackLength) { continue; }
 
-      //Iterate the number of hits on the plane
+      // Iterate the number of hits on the plane
       ++num_hits[planeid.Plane];
 
-      //If we still exist then we can be used in the calculation. Calculate the 3D pitch
+      // If we still exist then we can be used in the calculation. Calculate the 3D pitch
       double trackpitch = (TrajDirection * (wirepitch / TrajDirection.Dot(PlaneDirection))).R();
 
       if (fSCECorrectPitch) {
@@ -304,7 +339,7 @@ namespace ShowerRecoTools {
           trackpitch, pos, TrajDirection.Unit(), hit->WireID().TPC);
       }
 
-      //Calculate the dQdx
+      // Calculate the dQdx
       double dQdx = hit->Integral();
       if (fSumHitSnippets) {
         for (const art::Ptr<recob::Hit> secondaryHit : hitSnippets[hit])
@@ -312,19 +347,31 @@ namespace ShowerRecoTools {
       }
       dQdx /= trackpitch;
 
-      //Calculate the dEdx
+      // Calculate the dEdx
       double localEField = detProp.Efield();
       if (fSCECorrectEField) {
         localEField = IShowerTool::GetLArPandoraShowerAlg().SCECorrectEField(localEField, pos);
       }
-      double dEdx = fCalorimetryAlg.dEdx_AREA(
-        clockData, detProp, dQdx, hit->PeakTime(), planeid.Plane, pfpT0Time, localEField);
 
-      //Add the value to the dEdx
+      // Attempt the normalization
+      double dQdxNorm = dQdx;
+      if ( fApplyCorrectionsInNorm ) {
+	      dQdxNorm = Normalize( dQdx,
+			    Event,
+			    *hit,
+			    InitialTrack.LocationAtPoint(index),
+			    InitialTrack.DirectionAtPoint(index),
+			    pfpT0Time );
+      }
+
+      double dEdx = fCalorimetryAlg.dEdx_AREA(
+        clockData, detProp, dQdxNorm, hit->PeakTime(), planeid.Plane, pfpT0Time, localEField);
+
+      // Add the value to the dEdx
       dEdx_vec[planeid.Plane].push_back(dEdx);
     }
 
-    //Choose max hits based on hitnum
+    // Choose max hits based on hitnum
     int max_hits = 0;
     int best_plane = -std::numeric_limits<int>::max();
     for (auto const& [plane, numHits] : num_hits) {
@@ -393,10 +440,98 @@ namespace ShowerRecoTools {
       }
     }
 
-    //Need to sort out errors sensibly.
-    ShowerEleHolder.SetElement(dEdx_val, dEdx_valErr, fShowerdEdxOutputLabel);
-    ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
-    ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+
+    //Get results from the same label, if set by a previous tool of the same type
+    std::vector<double> dEdx_val_previousTool;
+
+    if (ShowerEleHolder.CheckElement(fShowerdEdxOutputLabel)) {
+      ShowerEleHolder.GetElement(fShowerdEdxOutputLabel, dEdx_val_previousTool);
+      if (fVerbose > 2) {
+        std::cout << "Result from previous dEdx tool..." << std::endl;
+        for (unsigned int plane = 0; plane < dEdx_val_previousTool.size(); plane++) {
+          std::cout << "Plane: " << plane << " with dEdx: " << dEdx_val_previousTool[plane]
+                    << std::endl;
+        }
+      }
+    }
+    else {
+      //If the previous tool didn't run at all, just use this one
+      if (fVerbose > 1) { std::cout << "No previous tool to be overridden" << std::endl; }
+      ShowerEleHolder.SetElement(dEdx_val, dEdx_valErr, fShowerdEdxOutputLabel);
+      ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
+      ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+
+      return 0;
+    }
+
+    //Choose how to override results from the previous tool
+    switch (fResultsOverrideMode) {
+
+    //Always override previous results
+    //This will keep the previous result only if the current tool fails on all planes
+    case 0: {
+
+      if (fVerbose > 1) { std::cout << "Always overriding the previous result" << std::endl; }
+
+      ShowerEleHolder.SetElement(dEdx_val, dEdx_valErr, fShowerdEdxOutputLabel);
+      ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
+      ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+
+      break;
+    }
+
+    //Override plane-by-plane
+    case 1: {
+
+      if (fVerbose > 1) {
+        std::cout << "Overriding the previous result plane-by-plane" << std::endl;
+      }
+
+      std::vector<double> dEdx_val_overriddenPerPlane(dEdx_val);
+      for (unsigned int plane = 0; plane < dEdx_val.size(); plane++) {
+        //If the current tool fails, just retain plane-by-plane the result from the previous tool
+        if (dEdx_val[plane] < 0.) {
+          dEdx_val_overriddenPerPlane[plane] = dEdx_val_previousTool[plane];
+          if (fVerbose > 2) {
+            std::cout << "This tool failed in plane " << plane
+                      << " and I am keeping the previous value" << std::endl;
+            std::cout << "Current value: " << dEdx_val[plane] << std::endl;
+            std::cout << "Chosen value:  " << dEdx_val_overriddenPerPlane[plane] << std::endl;
+          }
+        }
+        else {
+          dEdx_val_overriddenPerPlane[plane] = dEdx_val[plane];
+        }
+      }
+
+      ShowerEleHolder.SetElement(dEdx_val_overriddenPerPlane, dEdx_valErr, fShowerdEdxOutputLabel);
+      ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
+      ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+      break;
+    }
+
+    // Override only if all three planes are well-defined
+    case 2: {
+
+      if (fVerbose > 1) {
+        std::cout << "Only overriding if all three planes are well-defined" << std::endl;
+      }
+
+      if (dEdx_val[0] > 0. && dEdx_val[1] > 0. && dEdx_val[2] > 0.) {
+        ShowerEleHolder.SetElement(dEdx_val, dEdx_valErr, fShowerdEdxOutputLabel);
+        ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
+        ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+      }
+      else {
+        ShowerEleHolder.SetElement(dEdx_val_previousTool, dEdx_valErr, fShowerdEdxOutputLabel);
+        ShowerEleHolder.SetElement(best_plane, fShowerBestPlaneOutputLabel);
+        ShowerEleHolder.SetElement(dEdx_vec_cut, fShowerdEdxVecOutputLabel);
+      }
+
+      break;
+    }
+    }
+
     return 0;
   }
 
@@ -404,13 +539,13 @@ namespace ShowerRecoTools {
                                            std::vector<double>& dEdx_val)
   {
 
-    //As default do not apply this cut.
+    // As default do not apply this cut.
     if (fdEdxCut > 10) {
       dEdx_val = dEdx_vec;
       return;
     }
 
-    //Can only do this with 4 hits.
+    // Can only do this with 4 hits.
     if (dEdx_vec.size() < 4) {
       dEdx_val = dEdx_vec;
       return;
@@ -418,7 +553,7 @@ namespace ShowerRecoTools {
 
     bool upperbound = false;
 
-    //See if we are in the upper bound or upper bound defined by the cut.
+    // See if we are in the upper bound or upper bound defined by the cut.
     int upperbound_int = 0;
     if (dEdx_vec[0] > fdEdxCut) { ++upperbound_int; }
     if (dEdx_vec[1] > fdEdxCut) { ++upperbound_int; }
@@ -431,13 +566,13 @@ namespace ShowerRecoTools {
 
     for (unsigned int dEdx_iter = 2; dEdx_iter < dEdx_vec.size(); ++dEdx_iter) {
 
-      //The Function of dEdx as a function of E is flat above ~10 MeV.
-      //We are looking for a jump up (or down) above the ladau width in the dEx
-      //to account account for pair production.
-      //Dom Estimates that the somwhere above 0.28 MeV will be a good cut but 999 will prevent this stage.
+      // The Function of dEdx as a function of E is flat above ~10 MeV.
+      // We are looking for a jump up (or down) above the ladau width in the dEx
+      // to account account for pair production.
+      // Dom Estimates that the somwhere above 0.28 MeV will be a good cut but 999 will prevent this stage.
       double dEdx = dEdx_vec[dEdx_iter];
 
-      //We are really poo at physics and so attempt to find the pair production
+      // We are really poo at physics and so attempt to find the pair production
       if (upperbound) {
         if (dEdx > fdEdxCut) {
           dEdx_val.push_back(dEdx);
@@ -445,7 +580,7 @@ namespace ShowerRecoTools {
           continue;
         }
         else {
-          //Maybe its a landau fluctation lets try again.
+          // Maybe its a landau fluctation lets try again.
           if (dEdx_iter < dEdx_vec.size() - 1) {
             if (dEdx_vec[dEdx_iter + 1] > fdEdxCut) {
               if (fVerbose > 1)
@@ -453,7 +588,7 @@ namespace ShowerRecoTools {
               continue;
             }
           }
-          //I'll let one more value
+          // I'll let one more value
           if (dEdx_iter < dEdx_vec.size() - 2) {
             if (dEdx_vec[dEdx_iter + 2] > fdEdxCut) {
               if (fVerbose > 1)
@@ -461,7 +596,7 @@ namespace ShowerRecoTools {
               continue;
             }
           }
-          //We are hopefully we have one of our electrons has died.
+          // We are hopefully we have one of our electrons has died.
           break;
         }
       }
@@ -472,7 +607,7 @@ namespace ShowerRecoTools {
           continue;
         }
         else {
-          //Maybe its a landau fluctation lets try again.
+          // Maybe its a landau fluctation lets try again.
           if (dEdx_iter < dEdx_vec.size() - 1) {
             if (dEdx_vec[dEdx_iter + 1] > fdEdxCut) {
               if (fVerbose > 1)
@@ -480,7 +615,7 @@ namespace ShowerRecoTools {
               continue;
             }
           }
-          //I'll let one more value
+          // I'll let one more value
           if (dEdx_iter < dEdx_vec.size() - 2) {
             if (dEdx_vec[dEdx_iter + 2] > fdEdxCut) {
               if (fVerbose > 1)
@@ -488,12 +623,27 @@ namespace ShowerRecoTools {
               continue;
             }
           }
-          //We are hopefully in the the pair production zone.
+          // We are hopefully in the the pair production zone.
           break;
         }
       }
     }
     return;
+  }
+  
+  const double ShowerTrajPointdEdx::Normalize(const double dQdx,
+					const art::Event& e,
+					const recob::Hit& h,
+					const geo::Point_t& location,
+					const geo::Vector_t& direction,
+					const double t0)
+  {
+    double ret = dQdx;
+    for (auto const& nt : fNormalizationTools) {
+      ret = nt->Normalize(ret, e, h, location, direction, t0);
+    }
+    
+    return ret;
   }
 
 }
