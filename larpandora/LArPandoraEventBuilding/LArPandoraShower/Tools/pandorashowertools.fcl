@@ -46,6 +46,7 @@ showernumelectronsenergy:{
     ShowerEnergyOutputLabel     : "ShowerEnergy"
     ShowerBestPlaneOutputLabel  : "ShowerBestPlane"
     # PFParticleLabel             : "pandora"
+    DoMCLifetimeCorrection      : true  # this corrects for lifetime using the *simulated* lifetime
     ApplyCorrectionsInNorm      : false # do not expect INormalizeCharge tools
     NormTools                   : [] # empty list of INormalizeCharge tools
  }

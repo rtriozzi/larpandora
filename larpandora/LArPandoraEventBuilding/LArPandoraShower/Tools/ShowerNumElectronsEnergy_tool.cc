@@ -50,6 +50,7 @@ namespace ShowerRecoTools {
                            const std::vector<art::Ptr<recob::Hit>>& hits,
                            const geo::PlaneID::PlaneID_t plane,
                            const art::Event& Event,  
+                           const bool applyMCLifetimeCorrection,
                            const bool applyNormalization,
                            const HitsToSpacePoints& hitsToSpacePoints,
                            const geo::Vector_t& showerPCADir) const;
@@ -76,6 +77,7 @@ namespace ShowerRecoTools {
 
     // Declare stuff
     double fRecombinationFactor;
+    bool fDoMCLifetimeCorrection;
     bool fApplyCorrectionsInNorm; // Whether to instead apply calorimetry corrections in normalization
   };
 
@@ -87,6 +89,7 @@ namespace ShowerRecoTools {
     , fShowerBestPlaneOutputLabel(pset.get<std::string>("ShowerBestPlaneOutputLabel"))
     , fCalorimetryAlg(pset.get<fhicl::ParameterSet>("CalorimetryAlg"))
     , fRecombinationFactor(pset.get<double>("RecombinationFactor"))
+    , fDoMCLifetimeCorrection(pset.get<bool>("DoMCLifetimeCorrection"))
     , fApplyCorrectionsInNorm(pset.get<bool>("ApplyCorrectionsInNorm"))
   {
     if ( fApplyCorrectionsInNorm ) {
@@ -167,7 +170,7 @@ namespace ShowerRecoTools {
       unsigned int planeNumHits = hits.size();
 
       // Calculate the energy 
-      double Energy = CalculateEnergy(clockData, detProp, hits, plane, Event, fApplyCorrectionsInNorm, hitsToSpacePoints, showerPCADir);
+      double Energy = CalculateEnergy(clockData, detProp, hits, plane, Event, fDoMCLifetimeCorrection, fApplyCorrectionsInNorm, hitsToSpacePoints, showerPCADir);
 
       // if the energy is negative, leave it at -999
       if (Energy > 0) energyVec.at(plane) = Energy;
@@ -197,6 +200,7 @@ namespace ShowerRecoTools {
                                                    const std::vector<art::Ptr<recob::Hit>>& hits,
                                                    const geo::PlaneID::PlaneID_t plane,
                                                    const art::Event& Event,
+                                                   const bool applyMCLifetimeCorrection = true,
                                                    const bool applyNormalization = false,
                                                    const HitsToSpacePoints& hitsToSpacePoints = HitsToSpacePoints{},
                                                    const geo::Vector_t& showerPCADir = geo::Vector_t{-999., -999., -999.}) const
@@ -218,20 +222,25 @@ namespace ShowerRecoTools {
     geo::Point_t chargeWeightedPosition = {0, 0, 0}; // Initialize charge weighted position
 
     for (auto const& hit : hits) {
-      totalCharge += hit->Integral() *
-        fCalorimetryAlg.LifetimeCorrection(
-          clockData, detProp, hit->PeakTime()
-        ); // obtain charge and correct for lifetime
+      if ( applyMCLifetimeCorrection ) {
+        totalCharge += hit->Integral() *
+          fCalorimetryAlg.LifetimeCorrection(
+            clockData, detProp, hit->PeakTime()
+          ); // Obtain charge and correct for lifetime
+      }
+      else {
+        totalCharge += hit->Integral(); // Obtain charge *without* lifetime correction
+      }
         
-          if ( applyNormalization ) {
-            HitsToSpacePoints::const_iterator hIter = hitsToSpacePoints.find(hit);
-            if (hitsToSpacePoints.end() != hIter){
-              const art::Ptr<recob::SpacePoint> spacepoint = hIter->second;            
-              auto const& pos = spacepoint->position();  // this is a geo::Point_t
-              chargeWeightedPosition += geo::Vector_t{pos.X(), pos.Y(), pos.Z()} * hit->Integral();
-              totalChargePos += hit->Integral(); // Accumulate total charge
-            }
+      if ( applyNormalization ) {
+        HitsToSpacePoints::const_iterator hIter = hitsToSpacePoints.find(hit);
+        if (hitsToSpacePoints.end() != hIter){
+          const art::Ptr<recob::SpacePoint> spacepoint = hIter->second;            
+          auto const& pos = spacepoint->position();  // this is a geo::Point_t
+          chargeWeightedPosition += geo::Vector_t{pos.X(), pos.Y(), pos.Z()} * hit->Integral();
+          totalChargePos += hit->Integral(); // Accumulate total charge
         }
+      }
     }
 
     // correct charge due to recombination
